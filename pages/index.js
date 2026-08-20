@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
+import Papa from "papaparse";
 
 const POS_COLOR = { GK: "#F2C230", DEF: "#00FF87", MID: "#B983FF", FWD: "#E90052" };
 const DEFAULT_WEIGHTS = { form: 0.25, value: 0.15, fixture: 0.15, start: 0.2, news: 0.15 };
 const LS_KEY = "fpl_advisor_state_v1";
+const NEWS_OPTIONS = [
+  { v: "1", label: "Pozitivne vesti" },
+  { v: "0", label: "Bez vesti" },
+  { v: "-1", label: "Blaga sumnja" },
+  { v: "-2", label: "Upitan za start" },
+  { v: "-3", label: "Verovatno van tima" },
+];
+const emptyManual = { name: "", pos: "MID", team: "", price: "", ownership: "0", form: "0", total: "0", fdr: "3", startProb: "90", newsImpact: "0", newsNote: "" };
 
 function norm(val, min, max, invert = false) {
   if (max === min) return 50;
@@ -20,27 +29,37 @@ function newsImpactFromPlayer(p) {
 
 function computeScores(players, weights, overrides) {
   if (!players.length) return [];
-  const forms = players.map((p) => p.form);
-  const values = players.map((p) => (p.price > 0 ? p.total / p.price : 0));
-  const fdrs = players.map((p) => p.fdr);
+  // Apply manual overrides (startProb / newsImpact / newsNote / owned) on top of API data.
+  const merged = players.map((p) => {
+    const o = overrides[p.id] || {};
+    return {
+      ...p,
+      startProb: o.startProb !== undefined && o.startProb !== "" ? Number(o.startProb) : p.startProb,
+      manualNewsImpact: o.newsImpact !== undefined && o.newsImpact !== "" ? Number(o.newsImpact) : null,
+      newsNoteOverride: o.newsNote || "",
+      owned: !!o.owned,
+    };
+  });
+  const forms = merged.map((p) => p.form);
+  const values = merged.map((p) => (p.price > 0 ? p.total / p.price : 0));
+  const fdrs = merged.map((p) => p.fdr);
   const fMin = Math.min(...forms), fMax = Math.max(...forms);
   const vMin = Math.min(...values), vMax = Math.max(...values);
   const dMin = Math.min(...fdrs), dMax = Math.max(...fdrs);
 
-  return players.map((p) => {
+  return merged.map((p) => {
     const value = p.price > 0 ? p.total / p.price : 0;
     const formScore = norm(p.form, fMin, fMax);
     const valueScore = norm(value, vMin, vMax);
     const fixtureScore = norm(p.fdr, dMin, dMax, true);
     const startScore = Math.max(0, Math.min(100, p.startProb));
-    const impact = newsImpactFromPlayer(p);
+    const impact = p.manualNewsImpact !== null ? p.manualNewsImpact : newsImpactFromPlayer(p);
     const newsScore = Math.max(0, Math.min(100, 50 + impact * 15));
     const differentialBonus = p.ownership < 10 ? 4 : 0;
     const raw =
       formScore * weights.form + valueScore * weights.value + fixtureScore * weights.fixture +
       startScore * weights.start + newsScore * weights.news + differentialBonus;
-    const owned = !!(overrides[p.id] && overrides[p.id].owned);
-    return { ...p, value, formScore, valueScore, fixtureScore, startScore, newsScore, owned, score: Math.max(0, Math.min(100, raw)) };
+    return { ...p, value, formScore, valueScore, fixtureScore, startScore, newsScore, score: Math.max(0, Math.min(100, raw)) };
   });
 }
 
@@ -121,6 +140,11 @@ export default function Home() {
   const [history, setHistory] = useState([]);
   const [gwInput, setGwInput] = useState("1");
   const [suggestedWeights, setSuggestedWeights] = useState(null);
+  const [manualPlayers, setManualPlayers] = useState([]);
+  const [manualForm, setManualForm] = useState(emptyManual);
+  const [csvText, setCsvText] = useState("");
+  const [csvError, setCsvError] = useState("");
+  const [csvInfo, setCsvInfo] = useState("");
 
   useEffect(() => {
     try {
@@ -128,13 +152,14 @@ export default function Home() {
       if (saved.overrides) setOverrides(saved.overrides);
       if (saved.history) setHistory(saved.history);
       if (saved.weights) setWeights(saved.weights);
+      if (saved.manualPlayers) setManualPlayers(saved.manualPlayers);
     } catch {}
     loadData();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify({ overrides, history, weights }));
-  }, [overrides, history, weights]);
+    localStorage.setItem(LS_KEY, JSON.stringify({ overrides, history, weights, manualPlayers }));
+  }, [overrides, history, weights, manualPlayers]);
 
   async function loadData() {
     setLoading(true);
@@ -165,7 +190,8 @@ export default function Home() {
     }
   }
 
-  const scored = useMemo(() => computeScores(rawPlayers, weights, overrides), [rawPlayers, weights, overrides]);
+  const allPlayers = useMemo(() => [...rawPlayers, ...manualPlayers], [rawPlayers, manualPlayers]);
+  const scored = useMemo(() => computeScores(allPlayers, weights, overrides), [allPlayers, weights, overrides]);
 
   const filtered = useMemo(() => {
     return scored.filter((p) => {
@@ -186,6 +212,90 @@ export default function Home() {
 
   function toggleOwned(id) {
     setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], owned: !(prev[id] && prev[id].owned) } }));
+  }
+
+  function setOverrideField(id, field, val) {
+    setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], [field]: val } }));
+  }
+
+  function addManualPlayer() {
+    if (!manualForm.name.trim()) return;
+    setManualPlayers((prev) => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        name: manualForm.name.trim(),
+        webName: manualForm.name.trim(),
+        pos: manualForm.pos,
+        team: manualForm.team.trim().toUpperCase() || "—",
+        price: parseFloat(manualForm.price) || 0,
+        ownership: parseFloat(manualForm.ownership) || 0,
+        form: parseFloat(manualForm.form) || 0,
+        total: parseFloat(manualForm.total) || 0,
+        fdr: parseInt(manualForm.fdr) || 3,
+        startProb: parseFloat(manualForm.startProb) || 90,
+        status: "a",
+        rawNews: "",
+      },
+    ]);
+    setManualForm(emptyManual);
+  }
+
+  function removeManualPlayer(id) {
+    setManualPlayers((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  function parseCsv() {
+    setCsvError("");
+    setCsvInfo("");
+    if (!csvText.trim()) return;
+    Papa.parse(csvText.trim(), {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (h) => h.trim().toLowerCase(),
+      complete: (res) => {
+        let matched = 0, added = 0;
+        const newOverrides = {};
+        const newManual = [];
+        res.data.forEach((row, i) => {
+          const rowName = (row.name || "").trim();
+          if (!rowName) return;
+          const existing = allPlayers.find(
+            (p) => p.webName.toLowerCase() === rowName.toLowerCase() || p.name.toLowerCase() === rowName.toLowerCase()
+          );
+          if (existing) {
+            newOverrides[existing.id] = {
+              ...(overrides[existing.id] || {}),
+              startProb: row.startprob !== undefined && row.startprob !== "" ? row.startprob : undefined,
+              newsImpact: row.newsimpact !== undefined && row.newsimpact !== "" ? row.newsimpact : undefined,
+              newsNote: row.newsnote || undefined,
+              owned: String(row.owned).trim().toLowerCase() === "true" || String(row.owned).trim() === "1" || (overrides[existing.id] || {}).owned,
+            };
+            matched++;
+          } else {
+            newManual.push({
+              id: `manual-${Date.now()}-${i}`,
+              name: rowName, webName: rowName,
+              pos: (row.pos || "MID").trim().toUpperCase(),
+              team: (row.team || "—").trim().toUpperCase(),
+              price: parseFloat(row.price) || 0,
+              ownership: parseFloat(row.ownership) || 0,
+              form: parseFloat(row.form) || 0,
+              total: parseFloat(row.total) || 0,
+              fdr: parseInt(row.fdr) || 3,
+              startProb: row.startprob !== undefined ? parseFloat(row.startprob) : 90,
+              status: "a", rawNews: "",
+            });
+            added++;
+          }
+        });
+        setOverrides((prev) => ({ ...prev, ...newOverrides }));
+        setManualPlayers((prev) => [...prev, ...newManual]);
+        setCsvInfo(`Ažurirano ${matched} postojećih igrača, dodato ${added} novih.`);
+        setCsvText("");
+      },
+      error: () => setCsvError("Greška pri parsiranju CSV-a."),
+    });
   }
 
   function saveSnapshot() {
@@ -283,8 +393,8 @@ export default function Home() {
         {fetchedAt && <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Poslednje osveženo: {new Date(fetchedAt).toLocaleString("sr-RS")}</p>}
         {error && <p style={{ color: "#ff8a8a" }}>Greška: {error}</p>}
 
-        <div style={{ display: "flex", gap: 6, margin: "14px 0" }}>
-          {[["recommend", "Preporuke"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
+        <div style={{ display: "flex", gap: 6, margin: "14px 0", flexWrap: "wrap" }}>
+          {[["recommend", "Preporuke"], ["players", "Baza igrača"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ ...pillStyle, background: tab === key ? "#00FF87" : "#1c1233", color: tab === key ? "#0d0620" : "#cabfe9" }}>
               {label}
             </button>
@@ -361,6 +471,82 @@ export default function Home() {
         </button>
         {aiText && <div style={{ background: "#160c2b", borderRadius: 14, padding: 16, whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{aiText}</div>}
         </>)}
+
+        {tab === "players" && (
+          <div style={{ marginTop: 14 }}>
+            <p style={{ color: "#b6aed6", fontSize: 12.5, marginTop: 0 }}>
+              Ovde možeš ručno prepisati Start% i vesti za bilo kog igrača (npr. ako imaš svežiju informaciju od API-ja),
+              ili dodati potpuno novog igrača koji još nije u FPL bazi.
+            </p>
+
+            <div style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.6fr 0.6fr 0.6fr 0.6fr auto", gap: 8, marginBottom: 8 }}>
+                <input placeholder="Ime" value={manualForm.name} onChange={(e) => setManualForm({ ...manualForm, name: e.target.value })} style={inputStyle} />
+                <select value={manualForm.pos} onChange={(e) => setManualForm({ ...manualForm, pos: e.target.value })} style={inputStyle}>
+                  {["GK", "DEF", "MID", "FWD"].map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <input placeholder="Klub" value={manualForm.team} onChange={(e) => setManualForm({ ...manualForm, team: e.target.value })} style={inputStyle} />
+                <input placeholder="Cena" value={manualForm.price} onChange={(e) => setManualForm({ ...manualForm, price: e.target.value })} style={inputStyle} />
+                <input placeholder="FDR" value={manualForm.fdr} onChange={(e) => setManualForm({ ...manualForm, fdr: e.target.value })} style={inputStyle} />
+                <button onClick={addManualPlayer} style={btnStyle}>+ Dodaj</button>
+              </div>
+            </div>
+
+            <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden", maxHeight: 480, overflowY: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase", position: "sticky", top: 0 }}>
+                <span>Igrač</span><span>Poz</span><span>Cena</span><span>Skor</span><span>Start%</span><span>Vesti</span><span>Beleška</span><span></span>
+              </div>
+              {scored.slice().sort((a, b) => b.score - a.score).slice(0, 150).map((p) => (
+                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "7px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 12.5 }}>
+                  <span style={{ fontWeight: 700 }}>{p.webName} <span style={{ color: "#8a80ab", fontSize: 10.5 }}>{p.team}</span></span>
+                  <span style={{ color: POS_COLOR[p.pos] }}>{p.pos}</span>
+                  <span>£{p.price.toFixed(1)}m</span>
+                  <span style={{ fontWeight: 800, color: "#00FF87" }}>{Math.round(p.score)}</span>
+                  <input
+                    type="number" min="0" max="100"
+                    defaultValue={(overrides[p.id] && overrides[p.id].startProb) ?? p.startProb}
+                    onBlur={(e) => setOverrideField(p.id, "startProb", e.target.value)}
+                    style={{ width: 55, padding: "4px 6px", borderRadius: 6, border: "1px solid #2a1d4a", background: "#0d0620", color: "#e5defa" }}
+                  />
+                  <select
+                    defaultValue={(overrides[p.id] && overrides[p.id].newsImpact) ?? "0"}
+                    onChange={(e) => setOverrideField(p.id, "newsImpact", e.target.value)}
+                    style={{ ...inputStyle, padding: "4px 6px" }}
+                  >
+                    {NEWS_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
+                  </select>
+                  <input
+                    placeholder="npr. bol u preponi..."
+                    defaultValue={(overrides[p.id] && overrides[p.id].newsNote) || ""}
+                    onBlur={(e) => setOverrideField(p.id, "newsNote", e.target.value)}
+                    style={{ ...inputStyle, padding: "4px 6px" }}
+                  />
+                  {String(p.id).startsWith("manual-")
+                    ? <button onClick={() => removeManualPlayer(p.id)} style={{ background: "none", border: "none", color: "#8a80ab", cursor: "pointer" }}>✕</button>
+                    : <span />}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === "import" && (
+          <div style={{ marginTop: 14 }}>
+            <p style={{ color: "#b6aed6", fontSize: 12.5, marginTop: 0 }}>
+              Nalepi CSV (prvi red = zaglavlje): <code style={{ color: "#00FF87" }}>name,pos,team,price,ownership,form,total,fdr,startProb,newsImpact,newsNote,owned</code><br />
+              Ako se ime poklopi sa postojećim igračem, ažuriraju se Start%/vesti/tim. Ako ne postoji, dodaje se kao nov igrač.
+            </p>
+            <textarea
+              value={csvText}
+              onChange={(e) => setCsvText(e.target.value)}
+              placeholder={"name,pos,team,price,ownership,form,total,fdr,startProb,newsImpact,newsNote,owned\nSalah,MID,LIV,13.5,45,8.2,28,3,95,0,,false"}
+              style={{ width: "100%", minHeight: 160, background: "#160c2b", color: "#e5defa", border: "1px solid #2a1d4a", borderRadius: 10, padding: 12, fontSize: 12.5, fontFamily: "monospace", resize: "vertical" }}
+            />
+            {csvError && <p style={{ color: "#ff8a8a", fontSize: 13 }}>{csvError}</p>}
+            {csvInfo && <p style={{ color: "#00FF87", fontSize: 13 }}>{csvInfo}</p>}
+            <button onClick={parseCsv} style={{ ...btnStyle, marginTop: 10 }}>⬆ Uvezi podatke</button>
+          </div>
+        )}
 
         {tab === "calibrate" && (
           <div style={{ marginTop: 14 }}>
