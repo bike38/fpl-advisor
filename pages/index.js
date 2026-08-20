@@ -29,15 +29,18 @@ function newsImpactFromPlayer(p) {
 
 function computeScores(players, weights, overrides) {
   if (!players.length) return [];
-  // Apply manual overrides (startProb / newsImpact / newsNote / owned) on top of API data.
+  // Apply manual overrides (startProb / newsImpact / newsNote / status) on top of API data.
   const merged = players.map((p) => {
     const o = overrides[p.id] || {};
+    const status = o.status || (o.owned ? "owned" : "none"); // backward-compat with old boolean
     return {
       ...p,
       startProb: o.startProb !== undefined && o.startProb !== "" ? Number(o.startProb) : p.startProb,
       manualNewsImpact: o.newsImpact !== undefined && o.newsImpact !== "" ? Number(o.newsImpact) : null,
       newsNoteOverride: o.newsNote || "",
-      owned: !!o.owned,
+      ownStatus: status,
+      owned: status === "owned",
+      watch: status === "watch",
     };
   });
   const forms = merged.map((p) => p.form);
@@ -145,6 +148,9 @@ export default function Home() {
   const [csvText, setCsvText] = useState("");
   const [csvError, setCsvError] = useState("");
   const [csvInfo, setCsvInfo] = useState("");
+  const [teamHistory, setTeamHistory] = useState({});
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [newsLoading, setNewsLoading] = useState(false);
 
   useEffect(() => {
     try {
@@ -171,22 +177,43 @@ export default function Home() {
       setRawPlayers(data.players);
       setFetchedAt(data.fetchedAt);
 
-      const withNews = data.players.filter((p) => p.rawNews);
-      if (withNews.length) {
-        const newsRes = await fetch("/api/news", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ players: withNews }),
-        });
-        const newsData = await newsRes.json();
-        const map = {};
-        (newsData.translated || []).forEach((n) => { map[n.id] = n.summary; });
-        setNewsMap(map);
-      }
+      // Keširaj prevode vesti po danu - AI se poziva najviše jednom dnevno, ne pri svakom refresh-u.
+      const today = new Date().toISOString().slice(0, 10);
+      const cacheKey = "fpl_news_cache_v1";
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "{}");
+        if (cached.date === today && cached.map) {
+          setNewsMap(cached.map);
+          return;
+        }
+      } catch {}
+      await refreshNews(data.players, cacheKey, today);
     } catch (e) {
       setError(String(e.message || e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshNews(playersList, cacheKey, today) {
+    const withNews = (playersList || rawPlayers).filter((p) => p.rawNews);
+    if (!withNews.length) return;
+    setNewsLoading(true);
+    try {
+      const newsRes = await fetch("/api/news", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ players: withNews }),
+      });
+      const newsData = await newsRes.json();
+      const map = {};
+      (newsData.translated || []).forEach((n) => { map[n.id] = n.summary; });
+      setNewsMap(map);
+      const key = cacheKey || "fpl_news_cache_v1";
+      const dateKey = today || new Date().toISOString().slice(0, 10);
+      localStorage.setItem(key, JSON.stringify({ date: dateKey, map }));
+    } finally {
+      setNewsLoading(false);
     }
   }
 
@@ -209,9 +236,38 @@ export default function Home() {
     () => scored.filter((p) => p.owned).sort((a, b) => a.score - b.score),
     [scored]
   );
+  const myTeam = useMemo(() => scored.filter((p) => p.owned).sort((a, b) => b.score - a.score), [scored]);
+  const watchlist = useMemo(() => scored.filter((p) => p.watch).sort((a, b) => b.score - a.score), [scored]);
 
-  function toggleOwned(id) {
-    setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], owned: !(prev[id] && prev[id].owned) } }));
+  useEffect(() => {
+    if (tab === "myteam" && myTeam.length) loadTeamHistory(myTeam);
+    if (tab === "watchlist" && watchlist.length) loadTeamHistory(watchlist);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  function cycleStatus(id) {
+    setOverrides((prev) => {
+      const cur = (prev[id] && prev[id].status) || "none";
+      const next = cur === "none" ? "owned" : cur === "owned" ? "watch" : "none";
+      return { ...prev, [id]: { ...prev[id], status: next, owned: undefined } };
+    });
+  }
+
+  async function loadTeamHistory(players) {
+    const ids = players.map((p) => p.id).filter((id) => /^\d+$/.test(String(id)));
+    if (!ids.length) return;
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/player-history?ids=${ids.join(",")}`);
+      const data = await res.json();
+      const map = {};
+      (data.results || []).forEach((r) => { map[r.id] = r.history; });
+      setTeamHistory((prev) => ({ ...prev, ...map }));
+    } catch {
+      // tiho ignorišemo - istorija nije kritična za rad ostatka aplikacije
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   function setOverrideField(id, field, val) {
@@ -386,15 +442,20 @@ export default function Home() {
       <div style={{ maxWidth: 1000, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
           <h1 style={{ fontSize: 26, fontWeight: 900, margin: 0 }}>⚽ FPL Transfer Savetnik</h1>
-          <button onClick={loadData} disabled={loading} style={btnStyle}>
-            {loading ? "Osvežavam..." : "🔄 Osveži podatke"}
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => refreshNews()} disabled={newsLoading} style={{ ...btnStyle, background: "#B983FF" }} title="Ovo poziva AI i troši kredit">
+              {newsLoading ? "Prevodim..." : "🌐 Osveži vesti (AI)"}
+            </button>
+            <button onClick={loadData} disabled={loading} style={btnStyle}>
+              {loading ? "Osvežavam..." : "🔄 Osveži podatke"}
+            </button>
+          </div>
         </div>
-        {fetchedAt && <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Poslednje osveženo: {new Date(fetchedAt).toLocaleString("sr-RS")}</p>}
+        {fetchedAt && <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Poslednje osveženo: {new Date(fetchedAt).toLocaleString("sr-RS")} · vesti se prevode najviše jednom dnevno (keš)</p>}
         {error && <p style={{ color: "#ff8a8a" }}>Greška: {error}</p>}
 
         <div style={{ display: "flex", gap: 6, margin: "14px 0", flexWrap: "wrap" }}>
-          {[["recommend", "Preporuke"], ["players", "Baza igrača"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
+          {[["recommend", "Preporuke"], ["myteam", `Moj tim (${myTeam.length})`], ["watchlist", `Pratim (${watchlist.length})`], ["players", "Svi igrači"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ ...pillStyle, background: tab === key ? "#00FF87" : "#1c1233", color: tab === key ? "#0d0620" : "#cabfe9" }}>
               {label}
             </button>
@@ -412,7 +473,7 @@ export default function Home() {
         </div>
 
         <p style={{ color: "#8a80ab", fontSize: 12.5, marginBottom: 14 }}>
-          Klikni ☆ pored igrača da ga označiš kao "u mom timu" (čuva se u tvom browseru).
+          Klikni ikonicu da ciklaš: ☆ ništa → ★ u mom timu → 👁 pratim (čuva se u tvom browseru).
         </p>
 
         <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden", marginBottom: 20, maxHeight: 420, overflowY: "auto" }}>
@@ -421,8 +482,8 @@ export default function Home() {
           </div>
           {filtered.slice(0, 100).map((p) => (
             <div key={p.id} style={{ display: "grid", gridTemplateColumns: "0.4fr 1.3fr 0.5fr 0.6fr 0.6fr 0.6fr 0.6fr 1.5fr", padding: "8px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 13 }}>
-              <button onClick={() => toggleOwned(p.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: p.owned ? "#F2C230" : "#4a3f6b" }}>
-                {p.owned ? "★" : "☆"}
+              <button onClick={() => cycleStatus(p.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: p.owned ? "#F2C230" : p.watch ? "#00d4ff" : "#4a3f6b" }}>
+                {p.owned ? "★" : p.watch ? "👁" : "☆"}
               </button>
               <span style={{ fontWeight: 700 }}>{p.webName} <span style={{ color: "#8a80ab", fontSize: 11 }}>{p.team}</span></span>
               <span style={{ color: POS_COLOR[p.pos] }}>{p.pos}</span>
@@ -472,6 +533,60 @@ export default function Home() {
         {aiText && <div style={{ background: "#160c2b", borderRadius: 14, padding: 16, whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{aiText}</div>}
         </>)}
 
+        {(tab === "myteam" || tab === "watchlist") && (
+          <div style={{ marginTop: 14 }}>
+            {(() => {
+              const list = tab === "myteam" ? myTeam : watchlist;
+              const emptyMsg = tab === "myteam"
+                ? 'Nemaš označenih igrača. Idi na "Preporuke" i klikni ☆ dok ne postane ★.'
+                : 'Nemaš igrača na listi za praćenje. Klikni ☆ dva puta (do 👁) na "Preporuke" tabu.';
+              return (
+                <>
+                  {historyLoading && <p style={{ color: "#8a80ab", fontSize: 13 }}>Učitavam stvarne rezultate po kolima...</p>}
+                  {list.length === 0 && <p style={{ color: "#8a80ab", fontSize: 13 }}>{emptyMsg}</p>}
+                  {list.map((p) => {
+                    const hist = teamHistory[p.id] || [];
+                    const totalReal = hist.reduce((s, h) => s + h.points, 0);
+                    return (
+                      <div key={p.id} style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <div>
+                            <span style={{ fontWeight: 700 }}>{p.webName}</span>{" "}
+                            <span style={{ color: POS_COLOR[p.pos], fontSize: 11 }}>{p.pos}</span>{" "}
+                            <span style={{ color: "#8a80ab", fontSize: 11 }}>{p.team} · £{p.price.toFixed(1)}m</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+                            <span style={{ fontSize: 12, color: "#8a80ab" }}>Skor: <b style={{ color: "#00FF87" }}>{Math.round(p.score)}</b></span>
+                            {hist.length > 0 && <span style={{ fontSize: 12, color: "#8a80ab" }}>Ukupno: <b>{totalReal} pt</b></span>}
+                          </div>
+                        </div>
+                        {hist.length > 0 ? (
+                          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                            {hist.map((h) => (
+                              <div key={h.gw} style={{ background: "#0d0620", borderRadius: 8, padding: "4px 8px", fontSize: 11.5 }}>
+                                GW{h.gw}: <b style={{ color: h.points >= 6 ? "#00FF87" : h.points >= 2 ? "#e5defa" : "#ff8a8a" }}>{h.points}</b>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          !historyLoading && <p style={{ fontSize: 11.5, color: "#8a80ab", marginTop: 6, marginBottom: 0 }}>Još nema odigranih kola za ovog igrača.</p>
+                        )}
+                        {p.newsNote && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {p.newsNote}</p>}
+                        {newsMap[p.id] && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {newsMap[p.id]}</p>}
+                      </div>
+                    );
+                  })}
+                  {list.length > 0 && (
+                    <button onClick={() => loadTeamHistory(list)} disabled={historyLoading} style={{ ...btnStyle, marginTop: 4 }}>
+                      🔄 Osveži stvarne rezultate
+                    </button>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
+
         {tab === "players" && (
           <div style={{ marginTop: 14 }}>
             <p style={{ color: "#b6aed6", fontSize: 12.5, marginTop: 0 }}>
@@ -493,11 +608,14 @@ export default function Home() {
             </div>
 
             <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden", maxHeight: 480, overflowY: "auto" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase", position: "sticky", top: 0 }}>
-                <span>Igrač</span><span>Poz</span><span>Cena</span><span>Skor</span><span>Start%</span><span>Vesti</span><span>Beleška</span><span></span>
+              <div style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase", position: "sticky", top: 0 }}>
+                <span></span><span>Igrač</span><span>Poz</span><span>Cena</span><span>Skor</span><span>Start%</span><span>Vesti</span><span>Beleška</span><span></span>
               </div>
               {scored.slice().sort((a, b) => b.score - a.score).slice(0, 150).map((p) => (
-                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "7px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 12.5 }}>
+                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "7px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 12.5 }}>
+                  <button onClick={() => cycleStatus(p.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: p.owned ? "#F2C230" : p.watch ? "#00d4ff" : "#4a3f6b" }}>
+                    {p.owned ? "★" : p.watch ? "👁" : "☆"}
+                  </button>
                   <span style={{ fontWeight: 700 }}>{p.webName} <span style={{ color: "#8a80ab", fontSize: 10.5 }}>{p.team}</span></span>
                   <span style={{ color: POS_COLOR[p.pos] }}>{p.pos}</span>
                   <span>£{p.price.toFixed(1)}m</span>
