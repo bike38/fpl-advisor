@@ -147,7 +147,9 @@ export default function Home() {
   const [fixtureTicker, setFixtureTicker] = useState({});
   const [chips, setChips] = useState({
     wildcard1: { gw: "", used: false }, wildcard2: { gw: "", used: false },
-    freehit: { gw: "", used: false }, benchboost: { gw: "", used: false }, triplecaptain: { gw: "", used: false },
+    freehit1: { gw: "", used: false }, freehit2: { gw: "", used: false },
+    benchboost1: { gw: "", used: false }, benchboost2: { gw: "", used: false },
+    triplecaptain1: { gw: "", used: false }, triplecaptain2: { gw: "", used: false },
   });
   const [tab, setTab] = useState("recommend");
   const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
@@ -364,12 +366,16 @@ export default function Home() {
             (p) => p.webName.toLowerCase() === rowName.toLowerCase() || p.name.toLowerCase() === rowName.toLowerCase()
           );
           if (existing) {
+            const isOwned = String(row.owned).trim().toLowerCase() === "true" || String(row.owned).trim() === "1" || (overrides[existing.id] || {}).owned;
             newOverrides[existing.id] = {
               ...(overrides[existing.id] || {}),
               startProb: row.startprob !== undefined && row.startprob !== "" ? row.startprob : undefined,
               newsImpact: row.newsimpact !== undefined && row.newsimpact !== "" ? row.newsimpact : undefined,
               newsNote: row.newsnote || undefined,
-              owned: String(row.owned).trim().toLowerCase() === "true" || String(row.owned).trim() === "1" || (overrides[existing.id] || {}).owned,
+              status: isOwned ? "owned" : (overrides[existing.id] || {}).status,
+              owned: isOwned,
+              setPiece: row.setpiece !== undefined ? (String(row.setpiece).trim().toLowerCase() === "true" || row.setpiece === "1") : (overrides[existing.id] || {}).setPiece,
+              newSigning: row.newsigning !== undefined ? (String(row.newsigning).trim().toLowerCase() === "true" || row.newsigning === "1") : (overrides[existing.id] || {}).newSigning,
             };
             matched++;
           } else {
@@ -829,35 +835,47 @@ export default function Home() {
           );
         })()}
 
-        {tab === "chips" && (
-          <div style={{ marginTop: 14 }}>
-            <p style={{ color: "#8a80ab", fontSize: 12.5, marginTop: 0 }}>
-              Planiraj unapred kad ćeš iskoristiti čipove — po pravilu "planiraj, ne paniči posle lošeg kola".
-            </p>
-            <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase" }}>
-                <span>Čip</span><span>Planirano kolo</span><span>Iskorišćen</span>
-              </div>
-              {[
-                ["wildcard1", "Wildcard #1"], ["wildcard2", "Wildcard #2"], ["freehit", "Free Hit"],
-                ["benchboost", "Bench Boost"], ["triplecaptain", "Triple Captain"],
-              ].map(([key, label]) => (
-                <div key={key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr", padding: "9px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 13 }}>
-                  <span style={{ fontWeight: 700 }}>{label}</span>
-                  <input
-                    placeholder="npr. GW8" value={chips[key].gw}
-                    onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], gw: e.target.value } }))}
-                    style={{ ...inputStyle, width: 90 }}
-                  />
-                  <input
-                    type="checkbox" checked={chips[key].used}
-                    onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], used: e.target.checked } }))}
-                  />
+        {tab === "chips" && (() => {
+          const CHIP_ROWS = [
+            ["wildcard1", "Wildcard #1", "Fleksibilno — mnogi ga čekaju do GW4 (kad se prelazni rok zatvori) ili GW6 (posle pauze za reprezentacije)."],
+            ["wildcard2", "Wildcard #2", "Obično se čuva za drugi deo sezone, npr. oko GW20+, ili reaktivno kod povreda/naglih promena rasporeda."],
+            ["freehit1", "Free Hit #1", "GW3 se izdvaja — nekoliko velikih direktnih duela u istom kolu, pa Free Hit izbegava dupli rizik na oba tima."],
+            ["freehit2", "Free Hit #2", "Dobra opcija za kolo sa dosta blank/double gameweek-ova kasnije u sezoni, ili nepredviđene krize kod tvog tima."],
+            ["benchboost1", "Bench Boost #1", "GW1 ako gradiš jak tim od 15 od starta, ili GW2 zbog nesigurnih ranih sastava. Radi najbolje odmah posle Wildcard-a."],
+            ["benchboost2", "Bench Boost #2", "Isto pravilo — najbolje odmah nakon drugog Wildcard-a, kad je cela klupa sveže popunjena kvalitetnim igračima."],
+            ["triplecaptain1", "Triple Captain #1", "GW3 je prvi izbor većine (Haaland dočekuje Coventry); alternativa GW7 posle pauze za reprezentacije."],
+            ["triplecaptain2", "Triple Captain #2", "Čuva se za kolo sa najlakšim mogućim rasporedom tvog kapitena kasnije u sezoni — prati raspored kad se približi."],
+          ];
+          return (
+            <div style={{ marginTop: 14 }}>
+              <p style={{ color: "#8a80ab", fontSize: 12.5, marginTop: 0 }}>
+                Planiraj unapred kad ćeš iskoristiti čipove — po pravilu "planiraj, ne paniči posle lošeg kola". Predlozi ispod su opšte smernice, ne garancija.
+              </p>
+              <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.6fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase" }}>
+                  <span>Čip</span><span>Planirano kolo</span><span>Iskorišćen</span>
                 </div>
-              ))}
+                {CHIP_ROWS.map(([key, label, hint]) => (
+                  <div key={key} style={{ padding: "9px 14px", borderTop: "1px solid #2a1d4a" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.6fr", alignItems: "center", fontSize: 13 }}>
+                      <span style={{ fontWeight: 700 }}>{label}</span>
+                      <input
+                        placeholder="npr. GW8" value={chips[key].gw}
+                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], gw: e.target.value } }))}
+                        style={{ ...inputStyle, width: 90 }}
+                      />
+                      <input
+                        type="checkbox" checked={chips[key].used}
+                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], used: e.target.checked } }))}
+                      />
+                    </div>
+                    <p style={{ fontSize: 11, color: "#8a80ab", margin: "6px 0 0" }}>{hint}</p>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {tab === "import" && (
           <div style={{ marginTop: 14 }}>
