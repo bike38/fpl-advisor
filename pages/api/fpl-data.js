@@ -21,6 +21,23 @@ function startProbFromStatus(status, chance) {
   return 90;
 }
 
+function buildFixtureTicker(fixtures, teamsById) {
+  const byTeam = {};
+  Object.keys(teamsById).forEach((id) => { byTeam[id] = []; });
+  fixtures
+    .filter((f) => !f.finished && f.event)
+    .sort((a, b) => a.event - b.event)
+    .forEach((f) => {
+      if (byTeam[f.team_h]) byTeam[f.team_h].push({ gw: f.event, opponent: teamsById[f.team_a], isHome: true, fdr: f.team_h_difficulty });
+      if (byTeam[f.team_a]) byTeam[f.team_a].push({ gw: f.event, opponent: teamsById[f.team_h], isHome: false, fdr: f.team_a_difficulty });
+    });
+  const ticker = {};
+  Object.entries(byTeam).forEach(([id, fx]) => {
+    ticker[teamsById[id]] = fx.slice(0, 6);
+  });
+  return ticker;
+}
+
 export default async function handler(req, res) {
   try {
     const [bootstrapRes, fixturesRes] = await Promise.all([
@@ -58,7 +75,9 @@ export default async function handler(req, res) {
       };
     });
 
-    res.status(200).json({ players, fetchedAt: new Date().toISOString() });
+    const fixtureTicker = buildFixtureTicker(fixtures, teamsById);
+
+    res.status(200).json({ players, fixtureTicker, fetchedAt: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: "Neuspešno povlačenje FPL podataka", details: String(err) });
   }

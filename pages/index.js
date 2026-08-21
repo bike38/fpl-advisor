@@ -29,7 +29,7 @@ function newsImpactFromPlayer(p) {
 
 function computeScores(players, weights, overrides) {
   if (!players.length) return [];
-  // Apply manual overrides (startProb / newsImpact / newsNote / status) on top of API data.
+  // Apply manual overrides (startProb / newsImpact / newsNote / status / setPiece / newSigning) on top of API data.
   const merged = players.map((p) => {
     const o = overrides[p.id] || {};
     const status = o.status || (o.owned ? "owned" : "none"); // backward-compat with old boolean
@@ -41,6 +41,8 @@ function computeScores(players, weights, overrides) {
       ownStatus: status,
       owned: status === "owned",
       watch: status === "watch",
+      setPiece: !!o.setPiece,
+      newSigning: !!o.newSigning,
     };
   });
   const forms = merged.map((p) => p.form);
@@ -59,9 +61,13 @@ function computeScores(players, weights, overrides) {
     const impact = p.manualNewsImpact !== null ? p.manualNewsImpact : newsImpactFromPlayer(p);
     const newsScore = Math.max(0, Math.min(100, 50 + impact * 15));
     const differentialBonus = p.ownership < 10 ? 4 : 0;
+    // Izvođač penala/kornera je pouzdaniji izvor bonus poena - fiksni bonus nezavisan od forme.
+    const setPieceBonus = p.setPiece ? 6 : 0;
+    // Novo pojačanje bez potvrđene nailed minutaže - blaga kazna dok ne dokaže mesto u timu (startProb visok gasi kaznu).
+    const newSigningPenalty = p.newSigning && p.startProb < 90 ? -8 : 0;
     const raw =
       formScore * weights.form + valueScore * weights.value + fixtureScore * weights.fixture +
-      startScore * weights.start + newsScore * weights.news + differentialBonus;
+      startScore * weights.start + newsScore * weights.news + differentialBonus + setPieceBonus + newSigningPenalty;
     return { ...p, value, formScore, valueScore, fixtureScore, startScore, newsScore, score: Math.max(0, Math.min(100, raw)) };
   });
 }
@@ -138,6 +144,11 @@ export default function Home() {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [fetchedAt, setFetchedAt] = useState(null);
+  const [fixtureTicker, setFixtureTicker] = useState({});
+  const [chips, setChips] = useState({
+    wildcard1: { gw: "", used: false }, wildcard2: { gw: "", used: false },
+    freehit: { gw: "", used: false }, benchboost: { gw: "", used: false }, triplecaptain: { gw: "", used: false },
+  });
   const [tab, setTab] = useState("recommend");
   const [weights, setWeights] = useState(DEFAULT_WEIGHTS);
   const [history, setHistory] = useState([]);
@@ -160,12 +171,13 @@ export default function Home() {
       if (saved.history) setHistory(saved.history);
       if (saved.weights) setWeights(saved.weights);
       if (saved.manualPlayers) setManualPlayers(saved.manualPlayers);
+      if (saved.chips) setChips(saved.chips);
     } catch {}
     loadData();
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(LS_KEY, JSON.stringify({ overrides, history, weights, manualPlayers }));
+    localStorage.setItem(LS_KEY, JSON.stringify({ overrides, history, weights, manualPlayers, chips }));
   }, [overrides, history, weights, manualPlayers]);
 
   async function loadData() {
@@ -177,6 +189,7 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
       setRawPlayers(data.players);
       setFetchedAt(data.fetchedAt);
+      setFixtureTicker(data.fixtureTicker || {});
 
       // Keširaj prevode vesti po danu - AI se poziva najviše jednom dnevno, ne pri svakom refresh-u.
       const today = new Date().toISOString().slice(0, 10);
@@ -486,7 +499,7 @@ export default function Home() {
         {error && <p style={{ color: "#ff8a8a" }}>Greška: {error}</p>}
 
         <div style={{ display: "flex", gap: 6, margin: "14px 0", flexWrap: "wrap" }}>
-          {[["recommend", "Preporuke"], ["myteam", `Moj tim (${myTeam.length})`], ["watchlist", `Pratim (${watchlist.length})`], ["players", "Svi igrači"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
+          {[["recommend", "Preporuke"], ["myteam", `Moj tim (${myTeam.length})`], ["watchlist", `Pratim (${watchlist.length})`], ["players", "Svi igrači"], ["schedule", "Raspored"], ["chips", "Čipovi"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ ...pillStyle, background: tab === key ? "#00FF87" : "#1c1233", color: tab === key ? "#0d0620" : "#cabfe9" }}>
               {label}
             </button>
@@ -602,12 +615,21 @@ export default function Home() {
               </button>
             );
           };
+          const captainPick = myTeam.filter((p) => p.startProb >= 85).sort((a, b) => b.score - a.score)[0] || myTeam.sort((a, b) => b.score - a.score)[0];
           return (
             <div style={{ marginTop: 14 }}>
               {myTeam.length === 0 ? (
                 <p style={{ color: "#8a80ab", fontSize: 13 }}>Nemaš označenih igrača. Idi na "Preporuke" i klikni ☆ dok ne postane ★.</p>
               ) : (
                 <>
+                  {captainPick && (
+                    <div style={{ background: "linear-gradient(90deg, #F2C230, #ffdb6b)", borderRadius: 12, padding: "10px 16px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 20 }}>©</span>
+                      <span style={{ color: "#0d0620", fontWeight: 800, fontSize: 13.5 }}>
+                        Predloženi kapiten: {captainPick.webName} — skor {Math.round(captainPick.score)}, start {captainPick.startProb}%
+                      </span>
+                    </div>
+                  )}
                   <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Klikni igrača da ga prebaciš između postave i klupe. Raspored (4-4-2) se predlaže sam po skoru.</p>
                   <div style={{
                     background: "repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 40px, transparent 40px, transparent 80px), linear-gradient(180deg, #1fa563 0%, #158049 45%, #1c9a5c 100%)",
@@ -718,11 +740,11 @@ export default function Home() {
             </div>
 
             <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden", maxHeight: 480, overflowY: "auto" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase", position: "sticky", top: 0 }}>
-                <span></span><span>Igrač</span><span>Poz</span><span>Cena</span><span>Skor</span><span>Start%</span><span>Vesti</span><span>Beleška</span><span></span>
+              <div style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.4fr 0.6fr 0.6fr 0.4fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase", position: "sticky", top: 0 }}>
+                <span></span><span>Igrač</span><span>Poz</span><span>Cena</span><span>Skor</span><span>Start%</span><span>Vesti</span><span>Beleška</span><span title="Izvodi penale/kornere">⚽ Set</span><span title="Novo pojačanje ovog leta">🆕 Nov</span><span></span>
               </div>
               {scored.slice().sort((a, b) => b.score - a.score).slice(0, 150).map((p) => (
-                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.6fr 0.4fr", padding: "7px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 12.5 }}>
+                <div key={p.id} style={{ display: "grid", gridTemplateColumns: "0.35fr 1.1fr 0.5fr 0.6fr 0.6fr 0.6fr 1.2fr 1.4fr 0.6fr 0.6fr 0.4fr", padding: "7px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 12.5 }}>
                   <button onClick={() => cycleStatus(p.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: p.owned ? "#F2C230" : p.watch ? "#00d4ff" : "#4a3f6b" }}>
                     {p.owned ? "★" : p.watch ? "👁" : "☆"}
                   </button>
@@ -749,9 +771,88 @@ export default function Home() {
                     onBlur={(e) => setOverrideField(p.id, "newsNote", e.target.value)}
                     style={{ ...inputStyle, padding: "4px 6px" }}
                   />
+                  <input
+                    type="checkbox" title="Izvodi penale/kornere (+6 skor)"
+                    defaultChecked={!!(overrides[p.id] && overrides[p.id].setPiece)}
+                    onChange={(e) => setOverrideField(p.id, "setPiece", e.target.checked)}
+                  />
+                  <input
+                    type="checkbox" title="Novo pojačanje ovog leta (kazna dok ne potvrdi mesto)"
+                    defaultChecked={!!(overrides[p.id] && overrides[p.id].newSigning)}
+                    onChange={(e) => setOverrideField(p.id, "newSigning", e.target.checked)}
+                  />
                   {String(p.id).startsWith("manual-")
                     ? <button onClick={() => removeManualPlayer(p.id)} style={{ background: "none", border: "none", color: "#8a80ab", cursor: "pointer" }}>✕</button>
                     : <span />}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {tab === "schedule" && (() => {
+          const FDR_COLOR = { 1: "#0ba85a", 2: "#7ddc9d", 3: "#5b5470", 4: "#e08a3c", 5: "#e0405a" };
+          const teams = Object.entries(fixtureTicker).sort((a, b) => a[0].localeCompare(b[0]));
+          return (
+            <div style={{ marginTop: 14 }}>
+              <p style={{ color: "#8a80ab", fontSize: 12.5, marginTop: 0 }}>
+                Sledećih 6 kola po timu. Boja = težina (zeleno = lako, crveno = teško) — isti princip kao na zvaničnom FPL sajtu.
+              </p>
+              {teams.length === 0 && <p style={{ color: "#8a80ab", fontSize: 13 }}>Nema podataka — klikni "Osveži podatke".</p>}
+              <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "0.8fr repeat(6, 1fr)", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase" }}>
+                  <span>Tim</span>
+                  {[1, 2, 3, 4, 5, 6].map((n) => <span key={n} style={{ textAlign: "center" }}>K{n}</span>)}
+                </div>
+                {teams.map(([teamName, fixtures]) => (
+                  <div key={teamName} style={{ display: "grid", gridTemplateColumns: "0.8fr repeat(6, 1fr)", padding: "6px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center" }}>
+                    <span style={{ fontWeight: 700, fontSize: 12.5 }}>{teamName}</span>
+                    {Array.from({ length: 6 }).map((_, i) => {
+                      const f = fixtures[i];
+                      return (
+                        <div key={i} style={{ textAlign: "center" }}>
+                          {f ? (
+                            <span style={{
+                              display: "inline-block", width: "90%", padding: "3px 0", borderRadius: 6,
+                              background: FDR_COLOR[f.fdr] || "#5b5470", color: "#fff", fontSize: 11, fontWeight: 700,
+                            }}>
+                              {f.opponent}{f.isHome ? "(D)" : "(G)"}
+                            </span>
+                          ) : <span style={{ color: "#4a3f6b", fontSize: 11 }}>—</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {tab === "chips" && (
+          <div style={{ marginTop: 14 }}>
+            <p style={{ color: "#8a80ab", fontSize: 12.5, marginTop: 0 }}>
+              Planiraj unapred kad ćeš iskoristiti čipove — po pravilu "planiraj, ne paniči posle lošeg kola".
+            </p>
+            <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase" }}>
+                <span>Čip</span><span>Planirano kolo</span><span>Iskorišćen</span>
+              </div>
+              {[
+                ["wildcard1", "Wildcard #1"], ["wildcard2", "Wildcard #2"], ["freehit", "Free Hit"],
+                ["benchboost", "Bench Boost"], ["triplecaptain", "Triple Captain"],
+              ].map(([key, label]) => (
+                <div key={key} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr", padding: "9px 14px", borderTop: "1px solid #2a1d4a", alignItems: "center", fontSize: 13 }}>
+                  <span style={{ fontWeight: 700 }}>{label}</span>
+                  <input
+                    placeholder="npr. GW8" value={chips[key].gw}
+                    onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], gw: e.target.value } }))}
+                    style={{ ...inputStyle, width: 90 }}
+                  />
+                  <input
+                    type="checkbox" checked={chips[key].used}
+                    onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], used: e.target.checked } }))}
+                  />
                 </div>
               ))}
             </div>
