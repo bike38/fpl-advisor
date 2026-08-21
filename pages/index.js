@@ -173,7 +173,7 @@ export default function Home() {
       if (saved.history) setHistory(saved.history);
       if (saved.weights) setWeights(saved.weights);
       if (saved.manualPlayers) setManualPlayers(saved.manualPlayers);
-      if (saved.chips) setChips(saved.chips);
+      if (saved.chips) setChips((prev) => ({ ...prev, ...saved.chips }));
     } catch {}
     loadData();
   }, []);
@@ -855,23 +855,26 @@ export default function Home() {
                 <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.6fr", padding: "9px 14px", background: "#1c1233", fontSize: 11, fontWeight: 700, color: "#b6aed6", textTransform: "uppercase" }}>
                   <span>Čip</span><span>Planirano kolo</span><span>Iskorišćen</span>
                 </div>
-                {CHIP_ROWS.map(([key, label, hint]) => (
+                {CHIP_ROWS.map(([key, label, hint]) => {
+                  const c = chips[key] || { gw: "", used: false };
+                  return (
                   <div key={key} style={{ padding: "9px 14px", borderTop: "1px solid #2a1d4a" }}>
                     <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.8fr 0.6fr", alignItems: "center", fontSize: 13 }}>
                       <span style={{ fontWeight: 700 }}>{label}</span>
                       <input
-                        placeholder="npr. GW8" value={chips[key].gw}
-                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], gw: e.target.value } }))}
+                        placeholder="npr. GW8" value={c.gw}
+                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...c, gw: e.target.value } }))}
                         style={{ ...inputStyle, width: 90 }}
                       />
                       <input
-                        type="checkbox" checked={chips[key].used}
-                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...prev[key], used: e.target.checked } }))}
+                        type="checkbox" checked={c.used}
+                        onChange={(e) => setChips((prev) => ({ ...prev, [key]: { ...c, used: e.target.checked } }))}
                       />
                     </div>
                     <p style={{ fontSize: 11, color: "#8a80ab", margin: "6px 0 0" }}>{hint}</p>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
