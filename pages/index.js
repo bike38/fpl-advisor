@@ -572,6 +572,15 @@ export default function Home() {
             ["DEF", starting.filter((p) => p.pos === "DEF")],
             ["GK", starting.filter((p) => p.pos === "GK")],
           ];
+          const Jersey = ({ color, score, size = 52 }) => (
+            <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.45))" }}>
+              <path
+                d="M32 6 L14 20 L25 37 L34 29 L34 94 L66 94 L66 29 L75 37 L86 20 L68 6 L58 15 Q50 21 42 15 Z"
+                fill={color} stroke="rgba(13,6,32,0.55)" strokeWidth="3" strokeLinejoin="round"
+              />
+              <text x="50" y="68" textAnchor="middle" fontSize="30" fontWeight="900" fill="#0d0620">{score}</text>
+            </svg>
+          );
           const Chip = ({ p, dim }) => {
             const hist = teamHistory[p.id] || [];
             const lastGw = hist.length ? hist[hist.length - 1] : null;
@@ -580,21 +589,15 @@ export default function Home() {
                 onClick={() => toggleStarting(p.id, starting.includes(p))}
                 title="Klikni da prebaciš između postave i klupe"
                 style={{
-                  display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
-                  background: "none", border: "none", cursor: "pointer", width: 84, opacity: dim ? 0.65 : 1,
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                  background: "none", border: "none", cursor: "pointer", width: 84, opacity: dim ? 0.7 : 1,
                 }}
               >
-                <div style={{
-                  width: 46, height: 46, borderRadius: "50%", background: POS_COLOR[p.pos],
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontWeight: 900, fontSize: 15, color: "#0d0620", boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
-                }}>
-                  {Math.round(p.score)}
-                </div>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textAlign: "center", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>
+                <Jersey color={POS_COLOR[p.pos]} score={Math.round(p.score)} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textAlign: "center", textShadow: "0 1px 3px rgba(0,0,0,0.7)" }}>
                   {p.webName}
                 </span>
-                {lastGw && <span style={{ fontSize: 10, color: "#e5defa", background: "rgba(0,0,0,0.35)", borderRadius: 6, padding: "1px 5px" }}>GW{lastGw.gw}: {lastGw.points}</span>}
+                {lastGw && <span style={{ fontSize: 10, color: "#e5defa", background: "rgba(0,0,0,0.4)", borderRadius: 6, padding: "1px 5px" }}>GW{lastGw.gw}: {lastGw.points}</span>}
                 {(p.newsNote || newsMap[p.id]) && <span style={{ fontSize: 12 }}>📰</span>}
               </button>
             );
@@ -607,11 +610,13 @@ export default function Home() {
                 <>
                   <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Klikni igrača da ga prebaciš između postave i klupe. Raspored (4-4-2) se predlaže sam po skoru.</p>
                   <div style={{
-                    background: "linear-gradient(180deg, #0e8a4f 0%, #0b6e3f 50%, #0e8a4f 100%)",
+                    background: "repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 40px, transparent 40px, transparent 80px), linear-gradient(180deg, #1fa563 0%, #158049 45%, #1c9a5c 100%)",
                     borderRadius: 16, padding: "24px 12px", position: "relative", overflow: "hidden",
-                    backgroundImage: "repeating-linear-gradient(180deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 40px, transparent 40px, transparent 80px)",
+                    border: "1px solid rgba(255,255,255,0.15)",
                   }}>
-                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 90, height: 90, border: "2px solid rgba(255,255,255,0.25)", borderRadius: "50%" }} />
+                    <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: "70%", height: 2, background: "rgba(255,255,255,0.3)" }} />
+                    <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "70%", height: 2, background: "rgba(255,255,255,0.3)" }} />
+                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 100, height: 100, border: "2px solid rgba(255,255,255,0.3)", borderRadius: "50%" }} />
                     {rows.map(([label, players]) => (
                       <div key={label} style={{ display: "flex", justifyContent: "center", gap: 6, flexWrap: "wrap", marginBottom: 18, position: "relative", zIndex: 1 }}>
                         {players.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>— nema {label} u postavi —</span>}
