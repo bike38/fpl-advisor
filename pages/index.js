@@ -151,6 +151,7 @@ export default function Home() {
   const [teamHistory, setTeamHistory] = useState({});
   const [historyLoading, setHistoryLoading] = useState(false);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [watchPosTab, setWatchPosTab] = useState("ALL");
 
   useEffect(() => {
     try {
@@ -257,6 +258,30 @@ export default function Home() {
       const next = cur === "none" ? "owned" : cur === "owned" ? "watch" : "none";
       return { ...prev, [id]: { ...prev[id], status: next, owned: undefined } };
     });
+  }
+
+  function toggleStarting(id, currentlyStarting) {
+    setOverrideField(id, "starting", !currentlyStarting);
+  }
+
+  // Automatski predlaže 4-4-2 raspored po skoru, uz poštovanje ručnih izmena (klik na igrača).
+  function computeFormation(teamList, overridesMap) {
+    const byPos = { GK: [], DEF: [], MID: [], FWD: [] };
+    teamList.forEach((p) => { if (byPos[p.pos]) byPos[p.pos].push(p); });
+    Object.values(byPos).forEach((arr) => arr.sort((a, b) => b.score - a.score));
+    const target = { GK: 1, DEF: 4, MID: 4, FWD: 2 };
+    const startingIds = new Set();
+    Object.keys(target).forEach((pos) => {
+      byPos[pos].slice(0, target[pos]).forEach((p) => startingIds.add(p.id));
+    });
+    teamList.forEach((p) => {
+      const o = overridesMap[p.id];
+      if (o && o.starting === true) startingIds.add(p.id);
+      if (o && o.starting === false) startingIds.delete(p.id);
+    });
+    const starting = teamList.filter((p) => startingIds.has(p.id));
+    const bench = teamList.filter((p) => !startingIds.has(p.id));
+    return { starting, bench };
   }
 
   async function loadTeamHistory(players) {
@@ -539,59 +564,133 @@ export default function Home() {
         {aiText && <div style={{ background: "#160c2b", borderRadius: 14, padding: 16, whiteSpace: "pre-wrap", fontSize: 13.5, lineHeight: 1.6 }}>{aiText}</div>}
         </>)}
 
-        {(tab === "myteam" || tab === "watchlist") && (
-          <div style={{ marginTop: 14 }}>
-            {(() => {
-              const list = tab === "myteam" ? myTeam : watchlist;
-              const emptyMsg = tab === "myteam"
-                ? 'Nemaš označenih igrača. Idi na "Preporuke" i klikni ☆ dok ne postane ★.'
-                : 'Nemaš igrača na listi za praćenje. Klikni ☆ dva puta (do 👁) na "Preporuke" tabu.';
-              return (
+        {tab === "myteam" && (() => {
+          const { starting, bench } = computeFormation(myTeam, overrides);
+          const rows = [
+            ["FWD", starting.filter((p) => p.pos === "FWD")],
+            ["MID", starting.filter((p) => p.pos === "MID")],
+            ["DEF", starting.filter((p) => p.pos === "DEF")],
+            ["GK", starting.filter((p) => p.pos === "GK")],
+          ];
+          const Chip = ({ p, dim }) => {
+            const hist = teamHistory[p.id] || [];
+            const lastGw = hist.length ? hist[hist.length - 1] : null;
+            return (
+              <button
+                onClick={() => toggleStarting(p.id, starting.includes(p))}
+                title="Klikni da prebaciš između postave i klupe"
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                  background: "none", border: "none", cursor: "pointer", width: 84, opacity: dim ? 0.65 : 1,
+                }}
+              >
+                <div style={{
+                  width: 46, height: 46, borderRadius: "50%", background: POS_COLOR[p.pos],
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 900, fontSize: 15, color: "#0d0620", boxShadow: "0 2px 8px rgba(0,0,0,0.35)",
+                }}>
+                  {Math.round(p.score)}
+                </div>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#fff", textAlign: "center", textShadow: "0 1px 3px rgba(0,0,0,0.6)" }}>
+                  {p.webName}
+                </span>
+                {lastGw && <span style={{ fontSize: 10, color: "#e5defa", background: "rgba(0,0,0,0.35)", borderRadius: 6, padding: "1px 5px" }}>GW{lastGw.gw}: {lastGw.points}</span>}
+                {(p.newsNote || newsMap[p.id]) && <span style={{ fontSize: 12 }}>📰</span>}
+              </button>
+            );
+          };
+          return (
+            <div style={{ marginTop: 14 }}>
+              {myTeam.length === 0 ? (
+                <p style={{ color: "#8a80ab", fontSize: 13 }}>Nemaš označenih igrača. Idi na "Preporuke" i klikni ☆ dok ne postane ★.</p>
+              ) : (
                 <>
-                  {historyLoading && <p style={{ color: "#8a80ab", fontSize: 13 }}>Učitavam stvarne rezultate po kolima...</p>}
-                  {list.length === 0 && <p style={{ color: "#8a80ab", fontSize: 13 }}>{emptyMsg}</p>}
-                  {list.map((p) => {
-                    const hist = teamHistory[p.id] || [];
-                    const totalReal = hist.reduce((s, h) => s + h.points, 0);
-                    return (
-                      <div key={p.id} style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginBottom: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <div>
-                            <span style={{ fontWeight: 700 }}>{p.webName}</span>{" "}
-                            <span style={{ color: POS_COLOR[p.pos], fontSize: 11 }}>{p.pos}</span>{" "}
-                            <span style={{ color: "#8a80ab", fontSize: 11 }}>{p.team} · £{p.price.toFixed(1)}m</span>
-                          </div>
-                          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-                            <span style={{ fontSize: 12, color: "#8a80ab" }}>Skor: <b style={{ color: "#00FF87" }}>{Math.round(p.score)}</b></span>
-                            {hist.length > 0 && <span style={{ fontSize: 12, color: "#8a80ab" }}>Ukupno: <b>{totalReal} pt</b></span>}
-                          </div>
-                        </div>
-                        {hist.length > 0 ? (
-                          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                            {hist.map((h) => (
-                              <div key={h.gw} style={{ background: "#0d0620", borderRadius: 8, padding: "4px 8px", fontSize: 11.5 }}>
-                                GW{h.gw}: <b style={{ color: h.points >= 6 ? "#00FF87" : h.points >= 2 ? "#e5defa" : "#ff8a8a" }}>{h.points}</b>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          !historyLoading && <p style={{ fontSize: 11.5, color: "#8a80ab", marginTop: 6, marginBottom: 0 }}>Još nema odigranih kola za ovog igrača.</p>
-                        )}
-                        {p.newsNote && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {p.newsNote}</p>}
-                        {newsMap[p.id] && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {newsMap[p.id]}</p>}
+                  <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Klikni igrača da ga prebaciš između postave i klupe. Raspored (4-4-2) se predlaže sam po skoru.</p>
+                  <div style={{
+                    background: "linear-gradient(180deg, #0e8a4f 0%, #0b6e3f 50%, #0e8a4f 100%)",
+                    borderRadius: 16, padding: "24px 12px", position: "relative", overflow: "hidden",
+                    backgroundImage: "repeating-linear-gradient(180deg, rgba(255,255,255,0.04) 0px, rgba(255,255,255,0.04) 40px, transparent 40px, transparent 80px)",
+                  }}>
+                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 90, height: 90, border: "2px solid rgba(255,255,255,0.25)", borderRadius: "50%" }} />
+                    {rows.map(([label, players]) => (
+                      <div key={label} style={{ display: "flex", justifyContent: "center", gap: 6, flexWrap: "wrap", marginBottom: 18, position: "relative", zIndex: 1 }}>
+                        {players.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>— nema {label} u postavi —</span>}
+                        {players.map((p) => <Chip key={p.id} p={p} />)}
                       </div>
-                    );
-                  })}
-                  {list.length > 0 && (
-                    <button onClick={() => loadTeamHistory(list)} disabled={historyLoading} style={{ ...btnStyle, marginTop: 4 }}>
-                      🔄 Osveži stvarne rezultate
-                    </button>
-                  )}
+                    ))}
+                  </div>
+
+                  <div style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginTop: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#b6aed6", marginBottom: 10, textTransform: "uppercase" }}>Klupa</div>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      {bench.length === 0 && <span style={{ color: "#8a80ab", fontSize: 12 }}>Prazna klupa.</span>}
+                      {bench.map((p) => <Chip key={p.id} p={p} dim />)}
+                    </div>
+                  </div>
+
+                  {historyLoading && <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 10 }}>Učitavam stvarne rezultate po kolima...</p>}
+                  <button onClick={() => loadTeamHistory(myTeam)} disabled={historyLoading} style={{ ...btnStyle, marginTop: 12 }}>
+                    🔄 Osveži stvarne rezultate
+                  </button>
                 </>
-              );
-            })()}
-          </div>
-        )}
+              )}
+            </div>
+          );
+        })()}
+
+        {tab === "watchlist" && (() => {
+          const posFiltered = watchPosTab === "ALL" ? watchlist : watchlist.filter((p) => p.pos === watchPosTab);
+          return (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+                {["ALL", "GK", "DEF", "MID", "FWD"].map((p) => (
+                  <button key={p} onClick={() => setWatchPosTab(p)} style={{ ...pillStyle, background: watchPosTab === p ? "#00d4ff" : "#1c1233", color: watchPosTab === p ? "#0d0620" : "#cabfe9" }}>
+                    {p === "ALL" ? "Sve" : p}
+                  </button>
+                ))}
+              </div>
+              {historyLoading && <p style={{ color: "#8a80ab", fontSize: 13 }}>Učitavam stvarne rezultate po kolima...</p>}
+              {watchlist.length === 0 && <p style={{ color: "#8a80ab", fontSize: 13 }}>Nemaš igrača na listi za praćenje. Klikni ☆ dva puta (do 👁) na "Preporuke" tabu.</p>}
+              {posFiltered.map((p) => {
+                const hist = teamHistory[p.id] || [];
+                const totalReal = hist.reduce((s, h) => s + h.points, 0);
+                return (
+                  <div key={p.id} style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <span style={{ fontWeight: 700 }}>{p.webName}</span>{" "}
+                        <span style={{ color: POS_COLOR[p.pos], fontSize: 11 }}>{p.pos}</span>{" "}
+                        <span style={{ color: "#8a80ab", fontSize: 11 }}>{p.team} · £{p.price.toFixed(1)}m</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+                        <span style={{ fontSize: 12, color: "#8a80ab" }}>Skor: <b style={{ color: "#00FF87" }}>{Math.round(p.score)}</b></span>
+                        {hist.length > 0 && <span style={{ fontSize: 12, color: "#8a80ab" }}>Ukupno: <b>{totalReal} pt</b></span>}
+                      </div>
+                    </div>
+                    {hist.length > 0 ? (
+                      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                        {hist.map((h) => (
+                          <div key={h.gw} style={{ background: "#0d0620", borderRadius: 8, padding: "4px 8px", fontSize: 11.5 }}>
+                            GW{h.gw}: <b style={{ color: h.points >= 6 ? "#00FF87" : h.points >= 2 ? "#e5defa" : "#ff8a8a" }}>{h.points}</b>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      !historyLoading && <p style={{ fontSize: 11.5, color: "#8a80ab", marginTop: 6, marginBottom: 0 }}>Još nema odigranih kola za ovog igrača.</p>
+                    )}
+                    {p.newsNote && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {p.newsNote}</p>}
+                    {newsMap[p.id] && <p style={{ fontSize: 11.5, color: "#F2C230", marginTop: 6, marginBottom: 0 }}>📰 {newsMap[p.id]}</p>}
+                  </div>
+                );
+              })}
+              {watchlist.length > 0 && (
+                <button onClick={() => loadTeamHistory(watchlist)} disabled={historyLoading} style={{ ...btnStyle, marginTop: 4 }}>
+                  🔄 Osveži stvarne rezultate
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {tab === "players" && (
           <div style={{ marginTop: 14 }}>
