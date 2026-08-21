@@ -68,7 +68,12 @@ function computeScores(players, weights, overrides) {
     const raw =
       formScore * weights.form + valueScore * weights.value + fixtureScore * weights.fixture +
       startScore * weights.start + newsScore * weights.news + differentialBonus + setPieceBonus + newSigningPenalty;
-    return { ...p, value, formScore, valueScore, fixtureScore, startScore, newsScore, score: Math.max(0, Math.min(100, raw)) };
+    // Kapiten se bira svako kolo posebno na osnovu OČEKIVANOG UČINKA tog kola - ne na osnovu
+    // cene/vrednosti (valueScore) ni koliko je "diferencijalan" u odnosu na rivale (differentialBonus).
+    // To dvoje ima smisla pri kupovini igrača, ali je irelevantno, pa i pogrešno, za kapitensku odluku.
+    const captainRaw = formScore * 0.35 + fixtureScore * 0.30 + startScore * 0.20 + newsScore * 0.15 + setPieceBonus + newSigningPenalty;
+    const captainScore = Math.max(0, Math.min(100, captainRaw));
+    return { ...p, value, formScore, valueScore, fixtureScore, startScore, newsScore, captainScore, score: Math.max(0, Math.min(100, raw)) };
   });
 }
 
@@ -621,7 +626,11 @@ export default function Home() {
               </button>
             );
           };
-          const captainPick = myTeam.filter((p) => p.startProb >= 85).sort((a, b) => b.score - a.score)[0] || myTeam.sort((a, b) => b.score - a.score)[0];
+          const attackers = myTeam.filter((p) => (p.pos === "MID" || p.pos === "FWD") && p.startProb >= 85);
+          const captainPick =
+            attackers.sort((a, b) => b.captainScore - a.captainScore)[0] ||
+            myTeam.filter((p) => p.pos === "MID" || p.pos === "FWD").sort((a, b) => b.captainScore - a.captainScore)[0] ||
+            myTeam.sort((a, b) => b.captainScore - a.captainScore)[0];
           return (
             <div style={{ marginTop: 14 }}>
               {myTeam.length === 0 ? (
@@ -632,7 +641,7 @@ export default function Home() {
                     <div style={{ background: "linear-gradient(90deg, #F2C230, #ffdb6b)", borderRadius: 12, padding: "10px 16px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontSize: 20 }}>©</span>
                       <span style={{ color: "#0d0620", fontWeight: 800, fontSize: 13.5 }}>
-                        Predloženi kapiten: {captainPick.webName} — skor {Math.round(captainPick.score)}, start {captainPick.startProb}%
+                        Predloženi kapiten: {captainPick.webName} — kapitenski skor {Math.round(captainPick.captainScore)}, start {captainPick.startProb}%
                       </span>
                     </div>
                   )}
