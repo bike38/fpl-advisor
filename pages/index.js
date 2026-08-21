@@ -196,7 +196,13 @@ export default function Home() {
   }
 
   async function refreshNews(playersList, cacheKey, today) {
-    const withNews = (playersList || rawPlayers).filter((p) => p.rawNews);
+    const source = playersList || rawPlayers;
+    // Sigurnosna kočnica: šalji najviše 40 najbitnijih (najvlasničkih) igrača po pozivu,
+    // da trošak po pozivu bude predvidiv čak i ako ima mnogo vesti u isto vreme.
+    const withNews = source
+      .filter((p) => p.rawNews)
+      .sort((a, b) => b.ownership - a.ownership)
+      .slice(0, 40);
     if (!withNews.length) return;
     setNewsLoading(true);
     try {

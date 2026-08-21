@@ -6,7 +6,7 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Samo POST metoda." });
 
   const { players } = req.body || {};
-  const relevant = (players || []).filter((p) => p.rawNews && p.rawNews.trim().length > 0);
+  const relevant = (players || []).filter((p) => p.rawNews && p.rawNews.trim().length > 0).slice(0, 40);
 
   if (relevant.length === 0) {
     return res.status(200).json({ translated: [] });
