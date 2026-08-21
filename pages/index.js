@@ -352,6 +352,54 @@ export default function Home() {
     setManualPlayers((prev) => prev.filter((p) => p.id !== id));
   }
 
+  // Uklanja ručno dodate igrače koji se zapravo poklapaju sa nekim ko je već stigao
+  // preko FPL API-ja (npr. "Bruno Fernandes" ručno vs "B.Fernandes" iz API-ja) -
+  // pre brisanja, prebacuje sve override podatke (star/vesti/status) na pravi zapis.
+  function cleanupDuplicates() {
+    let removedCount = 0;
+    setManualPlayers((prevManual) => {
+      const stillManual = [];
+      const overrideMoves = {};
+      prevManual.forEach((mp) => {
+        const realMatch = rawPlayers.find((rp) => namesMatch(rp.webName, mp.name) || namesMatch(rp.name, mp.name));
+        if (realMatch) {
+          removedCount++;
+          const mpOverride = overrides[mp.id];
+          if (mpOverride) overrideMoves[realMatch.id] = { ...overrides[realMatch.id], ...mpOverride };
+        } else {
+          stillManual.push(mp);
+        }
+      });
+      if (Object.keys(overrideMoves).length) {
+        setOverrides((prevOv) => ({ ...prevOv, ...overrideMoves }));
+      }
+      return stillManual;
+    });
+    setCsvInfo(removedCount > 0 ? `Uklonjeno ${removedCount} duplikata.` : "Nema pronađenih duplikata.");
+  }
+
+// Poredi imena fleksibilno: tačno poklapanje ILI poklapanje po prezimenu (poslednja reč),
+// jer FPL API koristi skraćena imena (npr. "B.Fernandes", "Thiago") koja se ne poklapaju
+// slovo-po-slovo sa punim imenom koje neko unese ručno (npr. "Bruno Fernandes", "Igor Thiago").
+function namesMatch(a, b) {
+  if (!a || !b) return false;
+  const na = a.toLowerCase().trim();
+  const nb = b.toLowerCase().trim();
+  if (na === nb) return true;
+  const stripDot = (s) => s.replace(/^[a-z]\./, "").trim(); // "b.fernandes" -> "fernandes"
+  const lastWord = (s) => stripDot(s).split(/\s+/).filter(Boolean).pop() || "";
+  const la = lastWord(na);
+  const lb = lastWord(nb);
+  if (la && lb && la === lb) return true;
+  // Jedno ime sadrži drugo kao podniz (npr. "Igor Thiago" sadrži "Thiago")
+  if (stripDot(na).includes(lb) || stripDot(nb).includes(la)) return true;
+  return false;
+}
+
+function findMatch(pool, rowName) {
+  return pool.find((p) => namesMatch(p.webName, rowName) || namesMatch(p.name, rowName));
+}
+
   function parseCsv() {
     setCsvError("");
     setCsvInfo("");
@@ -367,9 +415,7 @@ export default function Home() {
         res.data.forEach((row, i) => {
           const rowName = (row.name || "").trim();
           if (!rowName) return;
-          const existing = allPlayers.find(
-            (p) => p.webName.toLowerCase() === rowName.toLowerCase() || p.name.toLowerCase() === rowName.toLowerCase()
-          );
+          const existing = findMatch(allPlayers, rowName);
           if (existing) {
             const isOwned = String(row.owned).trim().toLowerCase() === "true" || String(row.owned).trim() === "1" || (overrides[existing.id] || {}).owned;
             newOverrides[existing.id] = {
@@ -416,11 +462,11 @@ export default function Home() {
       startScore: p.startScore, newsScore: p.newsScore,
     });
     const buyLogs = buyCandidates.map((p) => ({
-      hid: `${Date.now()}-b-${p.id}`, gw, name: p.webName, pos: p.pos, type: "buy",
+      hid: `${Date.now()}-b-${p.id}`, id: p.id, gw, name: p.webName, pos: p.pos, type: "buy",
       score: p.score, ...logFields(p), actual: null,
     }));
     const sellLogs = sellCandidates.map((p) => ({
-      hid: `${Date.now()}-s-${p.id}`, gw, name: p.webName, pos: p.pos, type: "sell",
+      hid: `${Date.now()}-s-${p.id}`, id: p.id, gw, name: p.webName, pos: p.pos, type: "sell",
       score: p.score, ...logFields(p), actual: null,
     }));
     setHistory((prev) => [...prev, ...buyLogs, ...sellLogs]);
@@ -430,6 +476,37 @@ export default function Home() {
   function setActual(hid, val) {
     const n = parseFloat(val);
     setHistory((prev) => prev.map((h) => (h.hid === hid ? { ...h, actual: isNaN(n) ? null : n } : h)));
+  }
+
+  // Umesto ručnog kucanja poena, povlači STVARNE rezultate direktno sa FPL sajta
+  // (isti besplatni endpoint kao "Moj tim") i sam popuni "actual" gde nedostaje.
+  async function autoFillActuals() {
+    const pending = history.filter((h) => h.actual === null && h.id && /^\d+$/.test(String(h.id)));
+    const uniqueIds = [...new Set(pending.map((h) => h.id))];
+    if (!uniqueIds.length) {
+      setCsvInfo("Nema ničega za povlačenje — ili su svi popunjeni, ili nedostaje ID igrača (stariji unosi pre ove opcije).");
+      return;
+    }
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/player-history?ids=${uniqueIds.join(",")}`);
+      const data = await res.json();
+      const map = {};
+      (data.results || []).forEach((r) => { map[r.id] = r.history; });
+      let filled = 0;
+      setHistory((prev) => prev.map((h) => {
+        if (h.actual !== null || !h.id) return h;
+        const hist = map[h.id] || [];
+        const match = hist.find((x) => x.gw === h.gw);
+        if (match) { filled++; return { ...h, actual: match.points }; }
+        return h;
+      }));
+      setCsvInfo(`Automatski popunjeno: ${filled} od ${pending.length}. Ostalo ručno je ili kolo koje još nije odigrano, ili stariji unos bez sačuvanog ID-a.`);
+    } catch (e) {
+      setCsvInfo("Greška pri povlačenju stvarnih rezultata.");
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   function removeHistoryEntry(hid) {
@@ -596,13 +673,13 @@ export default function Home() {
             ["DEF", starting.filter((p) => p.pos === "DEF")],
             ["GK", starting.filter((p) => p.pos === "GK")],
           ];
-          const Jersey = ({ color, score, size = 52 }) => (
-            <svg width={size} height={size} viewBox="0 0 100 100" style={{ filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.45))" }}>
+          const Jersey = ({ color, score, size = 64 }) => (
+            <svg width={size} height={size * 0.86} viewBox="0 0 100 100" style={{ filter: "drop-shadow(0 3px 6px rgba(0,0,0,0.45))" }}>
               <path
-                d="M32 6 L14 20 L25 37 L34 29 L34 94 L66 94 L66 29 L75 37 L86 20 L68 6 L58 15 Q50 21 42 15 Z"
+                d="M28.4 6 L6.8 20 L20 37 L30.8 29 L30.8 94 L69.2 94 L69.2 29 L80 37 L93.2 20 L71.6 6 L59.6 15 Q50 21 40.4 15 Z"
                 fill={color} stroke="rgba(13,6,32,0.55)" strokeWidth="3" strokeLinejoin="round"
               />
-              <text x="50" y="68" textAnchor="middle" fontSize="30" fontWeight="900" fill="#0d0620">{score}</text>
+              <text x="50" y="68" textAnchor="middle" fontSize="38" fontWeight="900" fill="#0d0620" stroke="#ffffff" strokeWidth="4" paintOrder="stroke">{score}</text>
             </svg>
           );
           const Chip = ({ p, dim }) => {
@@ -614,7 +691,7 @@ export default function Home() {
                 title="Klikni da prebaciš između postave i klupe"
                 style={{
                   display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                  background: "none", border: "none", cursor: "pointer", width: 84, opacity: dim ? 0.7 : 1,
+                  background: "none", border: "none", cursor: "pointer", width: 96, opacity: dim ? 0.7 : 1,
                 }}
               >
                 <Jersey color={POS_COLOR[p.pos]} score={Math.round(p.score)} />
@@ -631,31 +708,43 @@ export default function Home() {
             attackers.sort((a, b) => b.captainScore - a.captainScore)[0] ||
             myTeam.filter((p) => p.pos === "MID" || p.pos === "FWD").sort((a, b) => b.captainScore - a.captainScore)[0] ||
             myTeam.sort((a, b) => b.captainScore - a.captainScore)[0];
+          const startingWithHist = starting.map((p) => ({ p, last: (teamHistory[p.id] || [])[(teamHistory[p.id] || []).length - 1] }));
+          const latestGw = startingWithHist.reduce((max, x) => (x.last && x.last.gw > max ? x.last.gw : max), 0);
+          const gwTotal = startingWithHist.reduce((sum, x) => sum + (x.last && x.last.gw === latestGw ? x.last.points : 0), 0);
+          const hasAnyHistory = startingWithHist.some((x) => x.last);
           return (
             <div style={{ marginTop: 14 }}>
               {myTeam.length === 0 ? (
                 <p style={{ color: "#8a80ab", fontSize: 13 }}>Nemaš označenih igrača. Idi na "Preporuke" i klikni ☆ dok ne postane ★.</p>
               ) : (
                 <>
-                  {captainPick && (
-                    <div style={{ background: "linear-gradient(90deg, #F2C230, #ffdb6b)", borderRadius: 12, padding: "10px 16px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 20 }}>©</span>
-                      <span style={{ color: "#0d0620", fontWeight: 800, fontSize: 13.5 }}>
-                        Predloženi kapiten: {captainPick.webName} — kapitenski skor {Math.round(captainPick.captainScore)}, start {captainPick.startProb}%
-                      </span>
-                    </div>
-                  )}
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    {captainPick && (
+                      <div style={{ background: "linear-gradient(90deg, #F2C230, #ffdb6b)", borderRadius: 12, padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+                        <span style={{ fontSize: 20 }}>©</span>
+                        <span style={{ color: "#0d0620", fontWeight: 800, fontSize: 13.5 }}>
+                          Predloženi kapiten: {captainPick.webName} — kapitenski skor {Math.round(captainPick.captainScore)}, start {captainPick.startProb}%
+                        </span>
+                      </div>
+                    )}
+                    {hasAnyHistory && (
+                      <div style={{ background: "#160c2b", border: "1px solid #00FF87", borderRadius: 12, padding: "10px 18px", display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 12, color: "#8a80ab" }}>GW{latestGw} poena (postava):</span>
+                        <span style={{ fontSize: 20, fontWeight: 900, color: "#00FF87" }}>{gwTotal}</span>
+                      </div>
+                    )}
+                  </div>
                   <p style={{ color: "#8a80ab", fontSize: 12, marginTop: 0 }}>Klikni igrača da ga prebaciš između postave i klupe. Raspored (4-4-2) se predlaže sam po skoru.</p>
                   <div style={{
-                    background: "repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 40px, transparent 40px, transparent 80px), linear-gradient(180deg, #1fa563 0%, #158049 45%, #1c9a5c 100%)",
-                    borderRadius: 16, padding: "24px 12px", position: "relative", overflow: "hidden",
+                    background: "repeating-linear-gradient(180deg, rgba(255,255,255,0.06) 0px, rgba(255,255,255,0.06) 34px, transparent 34px, transparent 68px), linear-gradient(180deg, #1fa563 0%, #158049 45%, #1c9a5c 100%)",
+                    borderRadius: 16, padding: "12px 10px", position: "relative", overflow: "hidden",
                     border: "1px solid rgba(255,255,255,0.15)",
                   }}>
                     <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", width: "70%", height: 2, background: "rgba(255,255,255,0.3)" }} />
                     <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "70%", height: 2, background: "rgba(255,255,255,0.3)" }} />
-                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 100, height: 100, border: "2px solid rgba(255,255,255,0.3)", borderRadius: "50%" }} />
+                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 80, height: 80, border: "2px solid rgba(255,255,255,0.3)", borderRadius: "50%" }} />
                     {rows.map(([label, players]) => (
-                      <div key={label} style={{ display: "flex", justifyContent: "center", gap: 6, flexWrap: "wrap", marginBottom: 18, position: "relative", zIndex: 1 }}>
+                      <div key={label} style={{ display: "flex", justifyContent: "center", gap: 4, flexWrap: "wrap", marginBottom: 8, position: "relative", zIndex: 1 }}>
                         {players.length === 0 && <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 11 }}>— nema {label} u postavi —</span>}
                         {players.map((p) => <Chip key={p.id} p={p} />)}
                       </div>
@@ -740,6 +829,10 @@ export default function Home() {
               Ovde možeš ručno prepisati Start% i vesti za bilo kog igrača (npr. ako imaš svežiju informaciju od API-ja),
               ili dodati potpuno novog igrača koji još nije u FPL bazi.
             </p>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+              <button onClick={cleanupDuplicates} style={{ ...btnStyle, background: "#B983FF" }}>🧹 Ukloni duplikate</button>
+              {csvInfo && <span style={{ color: "#00FF87", fontSize: 12.5 }}>{csvInfo}</span>}
+            </div>
 
             <div style={{ background: "#160c2b", borderRadius: 14, padding: 14, marginBottom: 16 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 0.6fr 0.6fr 0.6fr 0.6fr auto", gap: 8, marginBottom: 8 }}>
@@ -752,6 +845,10 @@ export default function Home() {
                 <input placeholder="FDR" value={manualForm.fdr} onChange={(e) => setManualForm({ ...manualForm, fdr: e.target.value })} style={inputStyle} />
                 <button onClick={addManualPlayer} style={btnStyle}>+ Dodaj</button>
               </div>
+              <p style={{ fontSize: 11, color: "#8a80ab", margin: "0 0 8px" }}>
+                Napomena: ako dodaješ igrača koji verovatno već postoji u FPL bazi, koristi njegovo skraćeno ime
+                (npr. "Thiago" umesto "Igor Thiago") da izbegneš duplikat — ili unesi bilo koje ime pa klikni "Ukloni duplikate" posle.
+              </p>
             </div>
 
             <div style={{ background: "#160c2b", borderRadius: 14, overflow: "hidden", maxHeight: 480, overflowY: "auto" }}>
@@ -911,9 +1008,16 @@ export default function Home() {
           <div style={{ marginTop: 14 }}>
             <p style={{ color: "#b6aed6", fontSize: 13, lineHeight: 1.6, marginTop: 0 }}>
               Kad sačuvaš predikciju na tabu Preporuke, ona se ovde zapiše sa skorom u tom trenutku.
-              Kad prođe kolo, upiši koliko je igrač stvarno osvojio poena — dugme dole onda predlaže nove
-              težine na osnovu toga šta je zaista pratilo stvarne rezultate.
+              Kad prođe kolo, klikni dugme ispod da se stvarni poeni povuku automatski sa FPL sajta —
+              ručno unosi samo ako alat ne uspe da pronađe podatak (npr. vrlo star unos).
             </p>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+              <button onClick={autoFillActuals} disabled={historyLoading} style={btnStyle}>
+                {historyLoading ? "Povlačim..." : "⚡ Povuci stvarne poene automatski"}
+              </button>
+              {csvInfo && <span style={{ color: "#00FF87", fontSize: 12.5 }}>{csvInfo}</span>}
+            </div>
 
             {calibStats && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
