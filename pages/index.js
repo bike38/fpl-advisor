@@ -150,6 +150,7 @@ export default function Home() {
   const [aiLoading, setAiLoading] = useState(false);
   const [fetchedAt, setFetchedAt] = useState(null);
   const [fixtureTicker, setFixtureTicker] = useState({});
+  const [setPieceNotes, setSetPieceNotes] = useState([]);
   const [chips, setChips] = useState({
     wildcard1: { gw: "", used: false }, wildcard2: { gw: "", used: false },
     freehit1: { gw: "", used: false }, freehit2: { gw: "", used: false },
@@ -197,6 +198,7 @@ export default function Home() {
       setRawPlayers(data.players);
       setFetchedAt(data.fetchedAt);
       setFixtureTicker(data.fixtureTicker || {});
+      setSetPieceNotes(data.setPieceNotes || []);
 
       // Keširaj prevode vesti po danu - AI se poziva najviše jednom dnevno, ne pri svakom refresh-u.
       const today = new Date().toISOString().slice(0, 10);
@@ -587,7 +589,7 @@ function findMatch(pool, rowName) {
         {error && <p style={{ color: "#ff8a8a" }}>Greška: {error}</p>}
 
         <div style={{ display: "flex", gap: 6, margin: "14px 0", flexWrap: "wrap" }}>
-          {[["recommend", "Preporuke"], ["myteam", `Moj tim (${myTeam.length})`], ["watchlist", `Pratim (${watchlist.length})`], ["players", "Svi igrači"], ["schedule", "Raspored"], ["chips", "Čipovi"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
+          {[["recommend", "Preporuke"], ["myteam", `Moj tim (${myTeam.length})`], ["watchlist", `Pratim (${watchlist.length})`], ["players", "Svi igrači"], ["schedule", "Raspored"], ["setpieces", "Standardne situacije"], ["chips", "Čipovi"], ["import", "Uvoz CSV"], ["calibrate", "Kalibracija"]].map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} style={{ ...pillStyle, background: tab === key ? "#00FF87" : "#1c1233", color: tab === key ? "#0d0620" : "#cabfe9" }}>
               {label}
             </button>
@@ -940,6 +942,30 @@ function findMatch(pool, rowName) {
             </div>
           );
         })()}
+
+        {tab === "setpieces" && (
+          <div style={{ marginTop: 14 }}>
+            <p style={{ color: "#8a80ab", fontSize: 12.5, marginTop: 0 }}>
+              Zvanične FPL napomene o izvođačima penala/kornera/slobodnjaka po timu — ništa ne unosiš ručno,
+              povlači se automatski. Napomene su na engleskom (izvor je zvanični FPL sajt); ako želiš, koristi
+              ove informacije da čekiraš "⚽ Set" na igraču u "Svi igrači" tabu.
+            </p>
+            {setPieceNotes.length === 0 && (
+              <p style={{ color: "#8a80ab", fontSize: 13 }}>
+                Trenutno nema dostupnih napomena (FPL ih objavljuje postepeno, obično bliže početku sezone/kola) —
+                probaj "🔄 Osveži podatke" ponovo kasnije.
+              </p>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {setPieceNotes.map((t, i) => (
+                <div key={i} style={{ background: "#160c2b", borderRadius: 12, padding: "12px 16px" }}>
+                  <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4, color: "#00FF87" }}>{t.team}</div>
+                  <div style={{ fontSize: 12.5, color: "#e5defa", lineHeight: 1.5 }}>{t.notes}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {tab === "chips" && (() => {
           const CHIP_ROWS = [

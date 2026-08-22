@@ -40,9 +40,10 @@ function buildFixtureTicker(fixtures, teamsById) {
 
 export default async function handler(req, res) {
   try {
-    const [bootstrapRes, fixturesRes] = await Promise.all([
+    const [bootstrapRes, fixturesRes, setPieceRes] = await Promise.all([
       fetch("https://fantasy.premierleague.com/api/bootstrap-static/"),
       fetch("https://fantasy.premierleague.com/api/fixtures/"),
+      fetch("https://fantasy.premierleague.com/api/team/set-piece-notes/").catch(() => null),
     ]);
 
     if (!bootstrapRes.ok || !fixturesRes.ok) {
@@ -77,7 +78,25 @@ export default async function handler(req, res) {
 
     const fixtureTicker = buildFixtureTicker(fixtures, teamsById);
 
-    res.status(200).json({ players, fixtureTicker, fetchedAt: new Date().toISOString() });
+    // Zvanične FPL napomene o izvođačima standardnih situacija (penali/korneri/slobodnjaci),
+    // po timu - besplatno, direktno od FPL-a, bez ručnog unosa.
+    let setPieceNotes = [];
+    if (setPieceRes && setPieceRes.ok) {
+      try {
+        const spData = await setPieceRes.json();
+        const rawList = Array.isArray(spData) ? spData : spData.teams || spData.data || [];
+        setPieceNotes = rawList
+          .map((t) => ({
+            team: teamsById[t.team ?? t.team_id ?? t.id] || null,
+            notes: t.notes || t.info || "",
+          }))
+          .filter((t) => t.team && t.notes);
+      } catch {
+        setPieceNotes = [];
+      }
+    }
+
+    res.status(200).json({ players, fixtureTicker, setPieceNotes, fetchedAt: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: "Neuspešno povlačenje FPL podataka", details: String(err) });
   }
