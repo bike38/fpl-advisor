@@ -960,7 +960,7 @@ function findMatch(pool, rowName) {
               {setPieceNotes.map((t, i) => (
                 <div key={i} style={{ background: "#160c2b", borderRadius: 12, padding: "12px 16px" }}>
                   <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4, color: "#00FF87" }}>{t.team}</div>
-                  <div style={{ fontSize: 12.5, color: "#e5defa", lineHeight: 1.5 }}>{t.notes}</div>
+                  <div style={{ fontSize: 12.5, color: "#e5defa", lineHeight: 1.5 }}>{String(t.notes || "")}</div>
                 </div>
               ))}
             </div>

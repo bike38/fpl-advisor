@@ -80,17 +80,18 @@ export default async function handler(req, res) {
 
     // Zvanične FPL napomene o izvođačima standardnih situacija (penali/korneri/slobodnjaci),
     // po timu - besplatno, direktno od FPL-a, bez ručnog unosa.
+    // Stvaran oblik odgovora: { last_updated, teams: [{ id, notes: [{ info_message, ... }] }] }
     let setPieceNotes = [];
     if (setPieceRes && setPieceRes.ok) {
       try {
         const spData = await setPieceRes.json();
-        const rawList = Array.isArray(spData) ? spData : spData.teams || spData.data || [];
+        const rawList = spData.teams || [];
         setPieceNotes = rawList
-          .map((t) => ({
-            team: teamsById[t.team ?? t.team_id ?? t.id] || null,
-            notes: t.notes || t.info || "",
-          }))
-          .filter((t) => t.team && t.notes);
+          .map((t) => {
+            const messages = (t.notes || []).map((n) => n.info_message).filter(Boolean);
+            return { team: teamsById[t.id] || null, notes: messages.join(" ") };
+          })
+          .filter((t) => t.team && t.notes && t.notes.trim() !== "Check back for additional notes soon");
       } catch {
         setPieceNotes = [];
       }
